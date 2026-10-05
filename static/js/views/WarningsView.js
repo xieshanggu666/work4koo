@@ -110,13 +110,14 @@ window.WarningsView = {
           <div class="panel-head">风险区转移台账 <span class="tag">{{ evacuations.length }} 次</span></div>
           <div class="panel-body nopad">
             <table class="grid">
-              <thead><tr><th>风险区</th><th>触发方式</th><th>人数</th><th>状态</th><th>处置单</th><th>时间</th></tr></thead>
+              <thead><tr><th>风险区</th><th>触发方式</th><th>人数</th><th>状态</th><th>指定避难点</th><th>处置单</th><th>时间</th></tr></thead>
               <tbody>
                 <tr v-for="e in evacuations" :key="e.id">
                   <td>{{ e.zone_name }}</td>
                   <td style="font-size:12px">{{ e.triggered_by }}</td>
                   <td class="num">{{ e.people }} 人</td>
                   <td><span class="badge" :class="evacColor(e.status)">{{ evacName(e.status) }}</span></td>
+                  <td style="font-size:12px">{{ e.shelter_name || '—' }}</td>
                   <td>
                     <span v-if="e.disposal_id" class="badge blue" style="cursor:pointer"
                           @click="$root.view='disposal'">#{{ e.disposal_id }}</span>

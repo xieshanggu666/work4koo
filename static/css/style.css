@@ -356,3 +356,18 @@ select option { background: #0a1830; }
 
 .writeback-item { display: flex; align-items: center; gap: 10px; }
 .writeback-item span:first-child { flex: none; }
+
+/* 应急资源与避难点协同调度 */
+.flow-step.skipped { opacity: .45; border-style: dashed; }
+.badge.cyan { color: #38d6e6; background: rgba(56, 214, 230, .12); }
+.btn.xs { padding: 3px 9px; font-size: 11.5px; }
+.res-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.res-form select, .res-form input { flex: 1 1 130px; min-width: 110px; }
+.res-form input[type=number] { max-width: 110px; }
+.res-pool { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+           padding: 5px 2px; font-size: 12.5px; border-bottom: 1px dashed rgba(125,149,180,.18); }
+.res-pool:last-child { border-bottom: none; }
+.cov-bar { width: 110px; height: 7px; border-radius: 4px; background: rgba(125,149,180,.18); overflow: hidden; }
+.cov-fill { height: 100%; border-radius: 4px; }
+.cov-fill.ok { background: var(--ok); }
+.cov-fill.gap { background: var(--orange-lv); }

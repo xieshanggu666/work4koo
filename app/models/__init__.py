@@ -197,13 +197,16 @@ class OperationPlan(Base):
 
 
 class DisposalOrder(Base):
-    """联合防汛处置协同单：调度员发起 → 预警值守审核 → 转移负责人执行 → 完成闭环。
+    """联合防汛处置协同单：调度员发起 → 预警值守审核 → 应急资源调度 → 转移负责人执行 → 完成闭环。
 
     一次预报运行至多发起一单（run_id 唯一）。审核通过后，方案快照
-    (plan_snapshot) 回写水库工况、预警与转移台账；历史预报运行缺少
-    方案/过程线时，发起环节自动补算补齐，兼容历史运行记录。
+    (plan_snapshot) 回写水库工况、预警与转移台账；审核通过后转移负责人分配
+    避难点容量、物资管理员分配车辆与物资、指挥员确认资源调度令（状态
+    approved → resourced，可直接跳过资源调度环节进入执行，兼容历史流转）；
+    历史预报运行缺少方案/过程线时，发起环节自动补算补齐，兼容历史运行记录。
     状态机：initiated（待审核）→ reviewing 通过 → approved（待执行）
-    → executing → executed（执行中）→ completing → completed（已闭环）。
+    → 资源协同（resourced 资源已调度，可选）→ executing → executed（执行中）
+    → completing → completed（已闭环）。
     """
     __tablename__ = "disposal_orders"
     __table_args__ = (
@@ -213,17 +216,19 @@ class DisposalOrder(Base):
     id = Column(Integer, primary_key=True)
     run_id = Column(Integer, nullable=False)
     title = Column(String(128), nullable=False)
-    status = Column(String(16), default="initiated")  # initiated/approved/executed/completed
+    status = Column(String(16), default="initiated")  # initiated/approved/resourced/executed/completed
     plan_snapshot = Column(JSON, default=dict)        # 审核归档的调度方案快照
     remark = Column(String(200), default="")
 
     initiated_by = Column(String(64), default="")     # 发起：调度员
     reviewed_by = Column(String(64), default="")      # 审核：预警值守
+    resourced_by = Column(String(64), default="")     # 资源调度令：指挥员
     executed_by = Column(String(64), default="")      # 执行：转移负责人
     completed_by = Column(String(64), default="")     # 完成：转移负责人
 
     initiated_at = Column(DateTime, default=datetime.now)
     reviewed_at = Column(DateTime, nullable=True)
+    resourced_at = Column(DateTime, nullable=True)
     executed_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
@@ -249,7 +254,7 @@ class WarningRecord(Base):
     threshold = Column(Float, default=0.0)
     message = Column(String(200), default="")
     created_at = Column(DateTime, default=datetime.now)
-    status = Column(String(16), default="active")         # active/cleared
+    status = Column(String(16), default="active")         # active/handling/cleared
 
 
 class FloodZone(Base):
@@ -284,4 +289,99 @@ class EvacuationRecord(Base):
     triggered_by = Column(String(64), default="")
     people = Column(Integer, default=0)
     status = Column(String(24), default="pending")        # pending/moving/safe
+    shelter_id = Column(Integer, nullable=True)           # 避难容量分配回写；历史记录为 NULL
+    shelter_name = Column(String(64), default="")         # 分配避难点名称冗余
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class Shelter(Base):
+    """应急避难点（容量由协同调度按处置单分配，跨处置单统一占用校验）"""
+    __tablename__ = "shelters"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64), nullable=False)
+    address = Column(String(200), default="")
+    capacity = Column(Integer, nullable=False, default=0)   # 可安置容量（人）
+    contact = Column(String(64), default="")
+    active = Column(Integer, default=1)
+    x = Column(Float, default=0)
+    y = Column(Float, default=0)
+
+
+class Vehicle(Base):
+    """应急车辆（运力池，处置单分配后跨单互斥，执行时发车、完成后归队）"""
+    __tablename__ = "vehicles"
+
+    id = Column(Integer, primary_key=True)
+    plate = Column(String(32), nullable=False)
+    kind = Column(String(24), default="bus")          # bus 大巴 / truck 货车 / ambulance 救护
+    seats = Column(Integer, default=0)                # 核载（人/车）
+    team = Column(String(64), default="")             # 所属车队/单位
+    status = Column(String(16), default="standby")    # standby/dispatched/departed/returned
+    active = Column(Integer, default=1)
+
+
+class Supply(Base):
+    """应急物资（库存按处置单分配预占，指挥员确认调度令时实际出库）"""
+    __tablename__ = "supplies"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64), nullable=False)
+    unit = Column(String(16), default="份")
+    stock = Column(Integer, default=0)                # 当前库存
+    safety_stock = Column(Integer, default=0)         # 安全库存（仅预警提示，不阻断）
+    active = Column(Integer, default=1)
+
+
+class ShelterAssignment(Base):
+    """避难点容量分配：处置单 × 避难点 × 转移台账（同一单同一区同一点至多一条）"""
+    __tablename__ = "shelter_assignments"
+    __table_args__ = (
+        UniqueConstraint("disposal_id", "evacuation_id", "shelter_id",
+                         name="uq_shelter_assign"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    disposal_id = Column(Integer, nullable=False)
+    evacuation_id = Column(Integer, nullable=False)
+    shelter_id = Column(Integer, nullable=False)
+    people = Column(Integer, default=0)
+    note = Column(String(200), default="")
+    created_by = Column(String(64), default="")       # 分配：转移负责人
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class VehicleDispatch(Base):
+    """车辆分配：处置单 × 车辆（一辆车同一处置单至多一条，跨处置单互斥）"""
+    __tablename__ = "vehicle_dispatches"
+    __table_args__ = (
+        UniqueConstraint("disposal_id", "vehicle_id", name="uq_vehicle_dispatch"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    disposal_id = Column(Integer, nullable=False)
+    vehicle_id = Column(Integer, nullable=False)
+    evacuation_id = Column(Integer, nullable=True)    # 指定服务的转移台账；空=机动运力
+    shuttles = Column(Integer, default=1)             # 计划往返趟次（运力=核载×趟次）
+    note = Column(String(200), default="")
+    created_by = Column(String(64), default="")       # 分配：物资管理员
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class SupplyAllocation(Base):
+    """物资分配：处置单 × 物资 × 转移台账（同一单同一区同一物资至多一条）"""
+    __tablename__ = "supply_allocations"
+    __table_args__ = (
+        UniqueConstraint("disposal_id", "evacuation_id", "supply_id",
+                         name="uq_supply_alloc"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    disposal_id = Column(Integer, nullable=False)
+    evacuation_id = Column(Integer, nullable=True)    # 指定转移台账；空=单级公用物资
+    supply_id = Column(Integer, nullable=False)
+    quantity = Column(Integer, default=0)
+    issued_quantity = Column(Integer, default=0)      # 调度令确认时已出库数量（重复确认只出增量）
+    note = Column(String(200), default="")
+    created_by = Column(String(64), default="")       # 分配：物资管理员
     created_at = Column(DateTime, default=datetime.now)

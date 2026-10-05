@@ -1,12 +1,15 @@
-"""联合防汛处置协同：围绕预报运行的四态闭环 + 审核方案回写。
+"""联合防汛处置协同：围绕预报运行的多态闭环 + 审核方案回写。
 
 角色与状态机
-    调度员 initiate   → initiated（待审核）
-    预警值守 review    → approved（审核通过，同步回写水库工况/预警/转移台账）
-    转移负责人 execute → executed（执行中，联动转移台账进入转移中）
-    转移负责人 complete→ completed（闭环：转移全部到位、预警销警）
+    调度员 initiate        → initiated（待审核）
+    预警值守 review         → approved（审核通过，同步回写水库工况/预警/转移台账）
+    转移负责人分配避难点 / 物资管理员分配车辆物资 / 指挥员确认资源调度令
+                           → resourced（资源已调度，回写转移进度与风险预警；可选环节）
+    转移负责人 execute      → executed（执行中，联动转移台账进入转移中、车辆发车）
+    转移负责人 complete     → completed（闭环：转移全部到位、预警销警、车辆归队）
 
 每次预报运行 (run_id) 至多发起一单；重复发起返回已存在的处置单。
+资源协同为可选环节：approved 与 resourced 均可启动执行，兼容历史四态流转。
 历史预报运行（早期库无调度方案/水库过程线）在发起时自动以
 write_ledgers=False 重算补齐方案快照所需数据，不改动任何历史台账，
 run_id 为 NULL 的历史遗留预警/转移记录原样保留。
@@ -15,27 +18,31 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import (DisposalOrder, EvacuationRecord, ForecastRun, ForecastSeries,
-                        OperationPlan, RainfallEvent, Reservoir, WarningRecord)
+                        OperationPlan, RainfallEvent, Reservoir, Vehicle,
+                        VehicleDispatch, WarningRecord)
+from app.services import resources as resource_svc
 from app.services.forecast import run_forecast
 
 # 状态 → 下一状态、可操作角色、操作人字段、落库时间字段
 TRANSITIONS = {
     "review": {"from": "initiated", "to": "approved", "roles": ("duty",),
                "actor": "reviewed_by", "at": "reviewed_at"},
-    "execute": {"from": "approved", "to": "executed", "roles": ("transfer_lead",),
+    "execute": {"from": ("approved", "resourced"), "to": "executed",
+                "roles": ("transfer_lead",),
                 "actor": "executed_by", "at": "executed_at"},
     "complete": {"from": "executed", "to": "completed", "roles": ("transfer_lead",),
                  "actor": "completed_by", "at": "completed_at"},
 }
 STATUS_TEXT = {"initiated": "待审核", "approved": "待执行",
-               "executed": "执行中", "completed": "已完成"}
-ROLE_TEXT = {"dispatcher": "调度员", "duty": "预警值守", "transfer_lead": "转移负责人"}
+               "resourced": "资源已调度", "executed": "执行中", "completed": "已完成"}
+ROLE_TEXT = {"dispatcher": "调度员", "duty": "预警值守", "transfer_lead": "转移负责人",
+             "supply_manager": "物资管理员", "commander": "指挥员"}
 MODE_TEXT = {"natural": "天然过流", "rule": "规则调度", "optimized": "联合优化调度"}
 
 _order_locks_guard = threading.Lock()
@@ -115,6 +122,8 @@ def serialize_order(db: Session, order: DisposalOrder) -> dict:
         WarningRecord.disposal_id == order.id).count()
     linked_evacs = db.query(EvacuationRecord).filter(
         EvacuationRecord.disposal_id == order.id).count()
+    resources = resource_svc.get_order_resources(db, order)
+    cov = resources["coverage"]
     return {
         "id": order.id,
         "run_id": order.run_id,
@@ -130,6 +139,15 @@ def serialize_order(db: Session, order: DisposalOrder) -> dict:
         "plan": order.plan_snapshot or None,
         "linked_warnings": linked_warnings,
         "linked_evacuations": linked_evacs,
+        "resourced_by": order.resourced_by,
+        "resourced_at": order.resourced_at.isoformat() if order.resourced_at else None,
+        "resources": resources,
+        "resource_summary": {
+            "shelter_seats": cov["shelter_seats"],
+            "vehicle_seats": cov["vehicle_seats"],
+            "supply_kinds": cov["supply_kinds"],
+            "ready": cov["ready"],
+        },
         "initiated_by": order.initiated_by,
         "reviewed_by": order.reviewed_by,
         "executed_by": order.executed_by,
@@ -178,10 +196,14 @@ def _get_order_for(db: Session, order_id: int, action: str) -> DisposalOrder:
     if order is None:
         raise HTTPException(404, f"处置单 #{order_id} 不存在")
     rule = TRANSITIONS[action]
-    if order.status != rule["from"]:
+    allowed = rule["from"]
+    if isinstance(allowed, str):
+        allowed = (allowed,)
+    if order.status not in allowed:
+        need = "、".join(STATUS_TEXT[s] for s in allowed)
         raise HTTPException(
             409, f"处置单当前为「{STATUS_TEXT.get(order.status, order.status)}」，"
-                 f"不能执行该操作（须为「{STATUS_TEXT[rule['from']]}」）")
+                 f"不能执行该操作（须为「{need}」）")
     return order
 
 
@@ -246,6 +268,15 @@ def execute_order(db: Session, order_id: int, operator: str, role: str,
             if ev.status == "pending":
                 ev.status = "moving"
 
+        # 已确认资源调度令时车辆发车（未做资源协同的处置单无车可发）
+        if order.status == "resourced":
+            dispatches = (db.query(VehicleDispatch)
+                          .filter(VehicleDispatch.disposal_id == order.id).all())
+            for d in dispatches:
+                vehicle = db.get(Vehicle, d.vehicle_id)
+                if vehicle is not None and vehicle.status != "departed":
+                    vehicle.status = "departed"
+
         order.status = "executed"
         order.executed_by = operator.strip() or "转移负责人"
         order.executed_at = datetime.now()
@@ -258,7 +289,7 @@ def execute_order(db: Session, order_id: int, operator: str, role: str,
 
 def complete_order(db: Session, order_id: int, operator: str, role: str,
                   summary: str = "") -> dict:
-    """转移负责人确认闭环：转移全部到位（safe）、关联预警销警（cleared）。"""
+    """转移负责人确认闭环：转移全部到位（safe）、关联预警销警（cleared）、车辆归队。"""
     _check_role(role, "complete")
     order = _get_order_for(db, order_id, "complete")
 
@@ -271,6 +302,14 @@ def complete_order(db: Session, order_id: int, operator: str, role: str,
                     .filter(WarningRecord.disposal_id == order.id).all())
         for w in warnings:
             w.status = "cleared"
+
+        # 车辆归队（处置单占用随之释放，可供其它处置单再派）
+        dispatches = (db.query(VehicleDispatch)
+                      .filter(VehicleDispatch.disposal_id == order.id).all())
+        for d in dispatches:
+            vehicle = db.get(Vehicle, d.vehicle_id)
+            if vehicle is not None:
+                vehicle.status = "returned" if vehicle.status == "departed" else "standby"
 
         order.status = "completed"
         order.completed_by = operator.strip() or "转移负责人"

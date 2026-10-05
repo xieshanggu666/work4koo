@@ -7,6 +7,7 @@ from app.models import (DisposalOrder, EvacuationRecord, FloodZone, ForecastRun,
                         ForecastSeries, RainStation, RainfallEvent, Reservoir,
                         RiverNode, RiverReach, SubBasin, WaterStation, WarningRecord)
 from app.services import disposal as disposal_svc
+from app.services import resources as resource_svc
 from app.services.forecast import run_forecast
 
 router = APIRouter(prefix="/api")
@@ -36,6 +37,44 @@ class CompleteBody(BaseModel):
     operator: str = ""
     role: str = "transfer_lead"
     summary: str = ""
+
+
+# ---------------- 应急资源与避难点协同调度请求体 ----------------
+class ShelterAssignBody(BaseModel):
+    evacuation_id: int
+    shelter_id: int
+    people: int
+    operator: str = ""
+    role: str = "transfer_lead"   # 转移负责人分配避难容量
+    note: str = ""
+
+
+class VehicleAssignBody(BaseModel):
+    vehicle_id: int
+    evacuation_id: int | None = None   # 空 = 机动运力
+    shuttles: int = 1
+    operator: str = ""
+    role: str = "supply_manager"       # 物资管理员分配车辆
+    note: str = ""
+
+
+class SupplyAssignBody(BaseModel):
+    supply_id: int
+    quantity: int
+    evacuation_id: int | None = None   # 空 = 单级公用物资
+    operator: str = ""
+    role: str = "supply_manager"       # 物资管理员分配物资
+    note: str = ""
+
+
+class ResourceReleaseBody(BaseModel):
+    role: str
+
+
+class ResourceConfirmBody(BaseModel):
+    operator: str = ""
+    role: str = "commander"            # 指挥员确认资源调度令
+    order_text: str = ""
 
 
 @router.get("/overview")
@@ -132,6 +171,7 @@ def evacuations(db: Session = Depends(get_db)):
     return [{"id": e.id, "run_id": e.run_id, "disposal_id": e.disposal_id,
              "zone_id": e.zone_id, "zone_name": e.zone_name,
              "triggered_by": e.triggered_by, "people": e.people, "status": e.status,
+             "shelter_id": e.shelter_id, "shelter_name": e.shelter_name,
              "created_at": e.created_at.isoformat() if e.created_at else None}
             for e in db.query(EvacuationRecord).order_by(EvacuationRecord.id.desc()).all()]
 
@@ -206,3 +246,65 @@ def disposal_execute(order_id: int, body: ExecuteBody, db: Session = Depends(get
 def disposal_complete(order_id: int, body: CompleteBody, db: Session = Depends(get_db)):
     """转移负责人确认完成：转移到位、预警销警，处置闭环。"""
     return disposal_svc.complete_order(db, order_id, body.operator, body.role, body.summary)
+
+
+# ---------------- 应急资源与避难点协同调度 ----------------
+@router.get("/resources/shelters")
+def resource_shelters(db: Session = Depends(get_db)):
+    """避难点台账（容量/其它处置单占用/实时可用）。"""
+    return resource_svc.list_shelters(db)
+
+
+@router.get("/resources/vehicles")
+def resource_vehicles(db: Session = Depends(get_db)):
+    """车辆台账（运力/占用状态/实时可用）。"""
+    return resource_svc.list_vehicles(db)
+
+
+@router.get("/resources/supplies")
+def resource_supplies(db: Session = Depends(get_db)):
+    """物资台账（库存/预占/实时可用/安全库存预警）。"""
+    return resource_svc.list_supplies(db)
+
+
+@router.post("/disposals/{order_id}/shelter-assignments")
+def shelter_assign(order_id: int, body: ShelterAssignBody, db: Session = Depends(get_db)):
+    """转移负责人为处置单关联转移行动分配避难点容量（超分 409）。"""
+    return resource_svc.assign_shelter(db, order_id, body.model_dump())
+
+
+@router.delete("/disposals/{order_id}/shelter-assignments/{assignment_id}")
+def shelter_release(order_id: int, assignment_id: int,
+                    body: ResourceReleaseBody, db: Session = Depends(get_db)):
+    return resource_svc.release_shelter(db, order_id, assignment_id, body.role)
+
+
+@router.post("/disposals/{order_id}/vehicle-dispatches")
+def vehicle_assign(order_id: int, body: VehicleAssignBody, db: Session = Depends(get_db)):
+    """物资管理员为处置单分配车辆（跨单互斥，重复派车幂等更新趟次）。"""
+    return resource_svc.assign_vehicle(db, order_id, body.model_dump())
+
+
+@router.delete("/disposals/{order_id}/vehicle-dispatches/{dispatch_id}")
+def vehicle_release(order_id: int, dispatch_id: int,
+                    body: ResourceReleaseBody, db: Session = Depends(get_db)):
+    return resource_svc.release_vehicle(db, order_id, dispatch_id, body.role)
+
+
+@router.post("/disposals/{order_id}/supply-allocations")
+def supply_assign(order_id: int, body: SupplyAssignBody, db: Session = Depends(get_db)):
+    """物资管理员为处置单分配物资（库存预占校验，超分 409）。"""
+    return resource_svc.assign_supply(db, order_id, body.model_dump())
+
+
+@router.delete("/disposals/{order_id}/supply-allocations/{allocation_id}")
+def supply_release(order_id: int, allocation_id: int,
+                   body: ResourceReleaseBody, db: Session = Depends(get_db)):
+    return resource_svc.release_supply(db, order_id, allocation_id, body.role)
+
+
+@router.post("/disposals/{order_id}/confirm-resources")
+def resources_confirm(order_id: int, body: ResourceConfirmBody, db: Session = Depends(get_db)):
+    """指挥员确认资源调度令：容量/运力覆盖校验、物资出库、回写转移进度与风险预警。"""
+    return resource_svc.confirm_resources(db, order_id, body.operator, body.role,
+                                          body.order_text)

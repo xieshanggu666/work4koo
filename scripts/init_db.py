@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.database import Base, engine, SessionLocal
 from app.models import (FloodZone, RainStation, RainfallEvent, Reservoir, RiverNode,
-                        RiverReach, SubBasin, WaterStation)
+                        RiverReach, Shelter, SubBasin, Supply, Vehicle, WaterStation)
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "flood.db")
 
@@ -82,6 +82,10 @@ def main():
                      thresholds={"base_level": 12.0, "blue": 15.0, "yellow": 16.5,
                                  "orange": 18.0, "red": 19.5,
                                  "rating": [[0, 12.0], [700, 15.0], [1500, 17.5], [2400, 20.0]]}),
+        WaterStation(id=4, name="龙潭水位站", node_id=6, x=520, y=430,
+                     thresholds={"base_level": 9.0, "blue": 12.5, "yellow": 14.0,
+                                 "orange": 15.0, "red": 17.0,
+                                 "rating": [[0, 9.0], [700, 12.5], [1400, 15.0], [2000, 17.5]]}),
     ]
     db.add_all(stations)
 
@@ -113,6 +117,39 @@ def main():
     ]
     db.add_all(zones)
 
+    # ---------- 应急避难点 ----------
+    shelters = [
+        Shelter(id=1, name="白水渡第一避难点（白水高中体育馆）", address="白水渡镇绕城路 88 号",
+                capacity=18000, contact="周校长 138-0001", x=470, y=390),
+        Shelter(id=2, name="白水渡第二避难点（镇文化中心）", address="白水渡镇府前路 12 号",
+                capacity=16000, contact="吴主任 138-0002", x=380, y=380),
+        Shelter(id=3, name="龙潭避难点（龙潭中学）", address="龙潭镇育才路 6 号",
+                capacity=20000, contact="郑校长 138-0003", x=650, y=470),
+    ]
+    db.add_all(shelters)
+
+    # ---------- 应急车辆 ----------
+    vehicles = [
+        Vehicle(id=1, plate="赣A·K1001", kind="bus", seats=45, team="县客运一队", status="standby"),
+        Vehicle(id=2, plate="赣A·K1002", kind="bus", seats=45, team="县客运一队", status="standby"),
+        Vehicle(id=3, plate="赣A·K2001", kind="bus", seats=45, team="县客运二队", status="standby"),
+        Vehicle(id=4, plate="赣A·K2002", kind="bus", seats=45, team="县客运二队", status="standby"),
+        Vehicle(id=5, plate="赣A·H3001", kind="truck", seats=5, team="县应急物资车队", status="standby"),
+        Vehicle(id=6, plate="赣A·H3002", kind="truck", seats=5, team="县应急物资车队", status="standby"),
+        Vehicle(id=7, plate="赣A·J9001", kind="ambulance", seats=6, team="县急救中心", status="standby"),
+    ]
+    db.add_all(vehicles)
+
+    # ---------- 应急物资 ----------
+    supplies = [
+        Supply(id=1, name="瓶装饮用水", unit="箱", stock=1200, safety_stock=200),
+        Supply(id=2, name="方便食品", unit="箱", stock=900, safety_stock=150),
+        Supply(id=3, name="棉被", unit="床", stock=6000, safety_stock=800),
+        Supply(id=4, name="急救药箱", unit="个", stock=300, safety_stock=60),
+        Supply(id=5, name="编织袋", unit="条", stock=20000, safety_stock=3000),
+    ]
+    db.add_all(supplies)
+
     # ---------- 降雨情景 ----------
     mm64 = [2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 17, 16, 14, 12, 10, 8, 6, 5, 4, 3, 3, 2, 2, 2]
     mm100 = [3, 4, 5, 7, 9, 12, 16, 20, 24, 26, 28, 26, 22, 18, 14, 10, 8, 6, 5, 4, 3, 3, 2, 2]
@@ -136,7 +173,7 @@ def main():
 
     db.commit()
     db.close()
-    print("数据库初始化完成：青岚江流域（4子流域、2水库调度、3降雨情景、2风险区）")
+    print("数据库初始化完成：青岚江流域（4子流域、2水库调度、3降雨情景、2风险区、3避难点、7车辆、5类物资）")
 
 
 if __name__ == "__main__":
