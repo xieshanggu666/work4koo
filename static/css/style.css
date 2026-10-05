@@ -324,12 +324,13 @@ select option { background: #0a1830; }
 .page-enter-from, .page-leave-to { opacity: 0; transform: translateY(6px); }
 
 /* ---------- 联合防汛处置协同 ---------- */
-.field input {
+.field input, .field select {
   background: #0a1830; color: var(--txt);
   border: 1px solid var(--line); border-radius: 7px;
   padding: 6px 10px; font-size: 13px; outline: none;
 }
-.field input:focus { border-color: rgba(55, 182, 255, .55); }
+.field input:focus, .field select:focus { border-color: rgba(55, 182, 255, .55); }
+.field select option { background: #0a1830; color: var(--txt); }
 
 .flow-steps { display: flex; align-items: stretch; gap: 4px; flex-wrap: wrap; }
 .flow-step {

@@ -283,5 +283,63 @@ class EvacuationRecord(Base):
     zone_name = Column(String(64), default="")
     triggered_by = Column(String(64), default="")
     people = Column(Integer, default=0)
+    arrived_people = Column(Integer, default=0)       # 已安置人数（资源到位回写；历史记录为 0）
     status = Column(String(24), default="pending")        # pending/moving/safe
     created_at = Column(DateTime, default=datetime.now)
+
+
+class Shelter(Base):
+    """避难点（安置容量资源）：容量随「调拨到位」逐步占用。"""
+    __tablename__ = "shelters"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64), nullable=False)
+    capacity = Column(Integer, nullable=False)        # 总安置容量 人
+    used = Column(Integer, default=0)                 # 已安置人数（到位确认后占用）
+    status = Column(String(16), default="open")       # open/full/closed
+    x = Column(Float, default=0)
+    y = Column(Float, default=0)
+
+
+class EmergencyResource(Base):
+    """应急资源储备（车辆 / 物资）：可用量随「调拨令」扣减。"""
+    __tablename__ = "emergency_resources"
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String(16), nullable=False)         # vehicle 车辆 / material 物资
+    name = Column(String(64), nullable=False)
+    unit = Column(String(16), default="")             # 辆 / 艘 / 件 / 箱
+    total = Column(Integer, nullable=False)           # 储备总量
+    available = Column(Integer, nullable=False)       # 当前可用量
+
+
+class ResourceAssignment(Base):
+    """应急资源调拨分配：围绕处置单分配避难容量、车辆与物资。
+
+    幂等键 (disposal_id, kind, target_id, zone_id)：同一处置单对同一目标
+    重复规划只更新数量，不重复新增；disposal_id 为 NULL 的是历史遗留记录，
+    不参与唯一约束、原样保留。状态机：planned（已规划）→ dispatched（已调拨）
+    → arrived（已到位）；到位后回写转移进度与风险预警。
+    """
+    __tablename__ = "resource_assignments"
+    __table_args__ = (
+        UniqueConstraint("disposal_id", "kind", "target_id", "zone_id",
+                         name="uq_assignment_disposal_target"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    disposal_id = Column(Integer, nullable=True)      # 关联处置单；历史记录为 NULL
+    kind = Column(String(16), nullable=False)         # shelter 避难容量 / vehicle 车辆 / material 物资
+    target_id = Column(Integer, nullable=False)       # shelter_id 或 emergency_resource_id
+    target_name = Column(String(64), default="")
+    zone_id = Column(Integer, default=0)              # 服务的风险区（避难容量按区分配；0=未指定）
+    zone_name = Column(String(64), default="")
+    quantity = Column(Integer, default=0)             # 分配数量（容量人 / 车辆辆 / 物资件）
+    status = Column(String(16), default="planned")    # planned/dispatched/arrived
+
+    planned_by = Column(String(64), default="")       # 规划：转移负责人 / 物资管理员
+    dispatched_by = Column(String(64), default="")    # 调拨：指挥员
+    arrived_by = Column(String(64), default="")       # 到位确认：指挥员
+    planned_at = Column(DateTime, default=datetime.now)
+    dispatched_at = Column(DateTime, nullable=True)
+    arrived_at = Column(DateTime, nullable=True)

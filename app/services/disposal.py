@@ -21,7 +21,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import (DisposalOrder, EvacuationRecord, ForecastRun, ForecastSeries,
-                        OperationPlan, RainfallEvent, Reservoir, WarningRecord)
+                        OperationPlan, RainfallEvent, Reservoir, ResourceAssignment,
+                        WarningRecord)
 from app.services.forecast import run_forecast
 
 # 状态 → 下一状态、可操作角色、操作人字段、落库时间字段
@@ -35,7 +36,8 @@ TRANSITIONS = {
 }
 STATUS_TEXT = {"initiated": "待审核", "approved": "待执行",
                "executed": "执行中", "completed": "已完成"}
-ROLE_TEXT = {"dispatcher": "调度员", "duty": "预警值守", "transfer_lead": "转移负责人"}
+ROLE_TEXT = {"dispatcher": "调度员", "duty": "预警值守", "transfer_lead": "转移负责人",
+             "material_manager": "物资管理员", "commander": "指挥员"}
 MODE_TEXT = {"natural": "天然过流", "rule": "规则调度", "optimized": "联合优化调度"}
 
 _order_locks_guard = threading.Lock()
@@ -115,6 +117,12 @@ def serialize_order(db: Session, order: DisposalOrder) -> dict:
         WarningRecord.disposal_id == order.id).count()
     linked_evacs = db.query(EvacuationRecord).filter(
         EvacuationRecord.disposal_id == order.id).count()
+    resource_rows = db.query(ResourceAssignment).filter(
+        ResourceAssignment.disposal_id == order.id).all()
+    resource_summary = {"total": len(resource_rows), "planned": 0,
+                        "dispatched": 0, "arrived": 0}
+    for a in resource_rows:
+        resource_summary[a.status] = resource_summary.get(a.status, 0) + 1
     return {
         "id": order.id,
         "run_id": order.run_id,
@@ -130,6 +138,7 @@ def serialize_order(db: Session, order: DisposalOrder) -> dict:
         "plan": order.plan_snapshot or None,
         "linked_warnings": linked_warnings,
         "linked_evacuations": linked_evacs,
+        "linked_resources": resource_summary,
         "initiated_by": order.initiated_by,
         "reviewed_by": order.reviewed_by,
         "executed_by": order.executed_by,

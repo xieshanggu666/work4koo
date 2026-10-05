@@ -7,6 +7,7 @@ from app.models import (DisposalOrder, EvacuationRecord, FloodZone, ForecastRun,
                         ForecastSeries, RainStation, RainfallEvent, Reservoir,
                         RiverNode, RiverReach, SubBasin, WaterStation, WarningRecord)
 from app.services import disposal as disposal_svc
+from app.services import resource as resource_svc
 from app.services.forecast import run_forecast
 
 router = APIRouter(prefix="/api")
@@ -36,6 +37,22 @@ class CompleteBody(BaseModel):
     operator: str = ""
     role: str = "transfer_lead"
     summary: str = ""
+
+
+# ---------------- 应急资源与避难点协同调度请求体 ----------------
+class PlanResourceBody(BaseModel):
+    operator: str = ""
+    role: str = "transfer_lead"  # shelter→transfer_lead；vehicle/material→material_manager
+    kind: str = "shelter"        # shelter 避难容量 / vehicle 车辆 / material 物资
+    target_id: int = 0           # 避难点或应急资源 id
+    zone_id: int = 0             # 避难容量须指定安置的风险区
+    quantity: int = 0
+
+
+class ResourceActionBody(BaseModel):
+    operator: str = ""
+    role: str = "commander"      # commander 指挥员
+    note: str = ""
 
 
 @router.get("/overview")
@@ -131,7 +148,8 @@ def warnings(db: Session = Depends(get_db)):
 def evacuations(db: Session = Depends(get_db)):
     return [{"id": e.id, "run_id": e.run_id, "disposal_id": e.disposal_id,
              "zone_id": e.zone_id, "zone_name": e.zone_name,
-             "triggered_by": e.triggered_by, "people": e.people, "status": e.status,
+             "triggered_by": e.triggered_by, "people": e.people,
+             "arrived_people": e.arrived_people or 0, "status": e.status,
              "created_at": e.created_at.isoformat() if e.created_at else None}
             for e in db.query(EvacuationRecord).order_by(EvacuationRecord.id.desc()).all()]
 
@@ -206,3 +224,41 @@ def disposal_execute(order_id: int, body: ExecuteBody, db: Session = Depends(get
 def disposal_complete(order_id: int, body: CompleteBody, db: Session = Depends(get_db)):
     """转移负责人确认完成：转移到位、预警销警，处置闭环。"""
     return disposal_svc.complete_order(db, order_id, body.operator, body.role, body.summary)
+
+
+# ---------------- 应急资源与避难点协同调度 ----------------
+@router.get("/resources/overview")
+def resource_overview(db: Session = Depends(get_db)):
+    """避难点容量与应急资源库存总览（含在途占用）。"""
+    return resource_svc.resource_overview(db)
+
+
+@router.get("/disposals/{order_id}/resources")
+def disposal_resources(order_id: int, db: Session = Depends(get_db)):
+    """处置单的资源调拨台账与汇总。"""
+    return resource_svc.list_assignments(db, order_id)
+
+
+@router.post("/disposals/{order_id}/resources/plan")
+def disposal_resource_plan(order_id: int, body: PlanResourceBody,
+                           db: Session = Depends(get_db)):
+    """规划调拨：转移负责人分配避难容量，物资管理员分配车辆/物资（幂等）。"""
+    return resource_svc.plan_assignment(db, order_id, body.kind, body.target_id,
+                                        body.zone_id, body.quantity,
+                                        body.operator, body.role)
+
+
+@router.post("/disposals/{order_id}/resources/dispatch")
+def disposal_resource_dispatch(order_id: int, body: ResourceActionBody,
+                               db: Session = Depends(get_db)):
+    """指挥员下达调拨令：已规划 → 已调拨，扣减资源可用量。"""
+    return resource_svc.dispatch_assignments(db, order_id, body.operator,
+                                             body.role, body.note)
+
+
+@router.post("/disposals/{order_id}/resources/arrive")
+def disposal_resource_arrive(order_id: int, body: ResourceActionBody,
+                             db: Session = Depends(get_db)):
+    """指挥员确认到位：已调拨 → 已到位，回写转移进度与风险预警。"""
+    return resource_svc.confirm_arrival(db, order_id, body.operator,
+                                        body.role, body.note)

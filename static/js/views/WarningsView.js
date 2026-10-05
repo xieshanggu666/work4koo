@@ -110,12 +110,15 @@ window.WarningsView = {
           <div class="panel-head">风险区转移台账 <span class="tag">{{ evacuations.length }} 次</span></div>
           <div class="panel-body nopad">
             <table class="grid">
-              <thead><tr><th>风险区</th><th>触发方式</th><th>人数</th><th>状态</th><th>处置单</th><th>时间</th></tr></thead>
+              <thead><tr><th>风险区</th><th>触发方式</th><th>人数</th><th>已安置</th><th>状态</th><th>处置单</th><th>时间</th></tr></thead>
               <tbody>
                 <tr v-for="e in evacuations" :key="e.id">
                   <td>{{ e.zone_name }}</td>
                   <td style="font-size:12px">{{ e.triggered_by }}</td>
                   <td class="num">{{ e.people }} 人</td>
+                  <td class="num" :style="(e.arrived_people||0) >= e.people && e.people>0 ? 'color:var(--ok)' : 'color:var(--brand)'">
+                    {{ e.arrived_people || 0 }} 人
+                  </td>
                   <td><span class="badge" :class="evacColor(e.status)">{{ evacName(e.status) }}</span></td>
                   <td>
                     <span v-if="e.disposal_id" class="badge blue" style="cursor:pointer"
@@ -124,7 +127,7 @@ window.WarningsView = {
                   </td>
                   <td style="font-size:11.5px;color:#7d95b4">{{ fmt.time(e.created_at) }}</td>
                 </tr>
-                <tr v-if="!evacuations.length"><td colspan="6" style="text-align:center;color:#7d95b4;padding:26px">无转移记录</td></tr>
+                <tr v-if="!evacuations.length"><td colspan="7" style="text-align:center;color:#7d95b4;padding:26px">无转移记录</td></tr>
               </tbody>
             </table>
           </div>

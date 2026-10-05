@@ -32,6 +32,12 @@ const API = {
   reviewDisposal: (id, body) => API.post(`/api/disposals/${id}/review`, body),
   executeDisposal: (id, body) => API.post(`/api/disposals/${id}/execute`, body),
   completeDisposal: (id, body) => API.post(`/api/disposals/${id}/complete`, body),
+  // 应急资源与避难点协同调度
+  resourceOverview: () => API.get("/api/resources/overview"),
+  disposalResources: (id) => API.get(`/api/disposals/${id}/resources`),
+  planResource: (id, body) => API.post(`/api/disposals/${id}/resources/plan`, body),
+  dispatchResources: (id, body) => API.post(`/api/disposals/${id}/resources/dispatch`, body),
+  arriveResources: (id, body) => API.post(`/api/disposals/${id}/resources/arrive`, body),
 };
 
 /* 全局运行状态：跨视图共享最近一次预报结果 / 运行记录 */

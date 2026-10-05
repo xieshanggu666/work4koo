@@ -289,6 +289,14 @@ window.DisposalView = {
                 <span>转移台账 {{ current.linked_evacuations }} 处关联处置单</span>
               </div>
               <div class="writeback-item">
+                <span class="badge green" v-if="current.linked_resources && current.linked_resources.arrived">已到位</span>
+                <span class="badge blue" v-else-if="current.linked_resources && (current.linked_resources.dispatched || current.linked_resources.planned)">调度中</span>
+                <span class="badge gray" v-else>未调度</span>
+                <span>应急资源调拨 {{ current.linked_resources ? current.linked_resources.total : 0 }} 条
+                  （到位 {{ current.linked_resources ? current.linked_resources.arrived : 0 }}）</span>
+                <button class="btn sm" style="margin-left:auto" @click="$root.view='resource'">资源调度 →</button>
+              </div>
+              <div class="writeback-item">
                 <span class="badge green" v-if="current.status==='completed'">已闭环</span>
                 <span class="badge gray" v-else>待完成</span>
                 <span>转移全部到位 · 关联预警统一销警</span>
